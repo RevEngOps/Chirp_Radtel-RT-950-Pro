@@ -38,6 +38,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import serial
+import time
 # MIT License
 #
 # Copyright (c) 2025 Nathan G. Barguss - 2E0NBS
@@ -2410,7 +2411,7 @@ class CloneSerialConfig:
     """Configuration for opening a serial connection to the radio."""
 
     port: str
-    baudrate: int = 9600
+    baudrate: int = 115200
     timeout: float = 1.0
     write_timeout: float = 1.0
 
@@ -2424,7 +2425,7 @@ class CloneSerialTransport:
         logger=None,
         rng: Optional[random.Random] = None,
     ) -> None:
-        self.serial = serial_port
+        self.serial: serial.Serial = serial_port
         self.logger = logger or get_logger("transport")
         # Enforce sensible minimums to avoid premature timeouts during clone
         try:
@@ -2462,6 +2463,7 @@ class CloneSerialTransport:
             timeout=config.timeout,
             write_timeout=config.write_timeout,
         )
+        time.sleep(0.05)
         return cls(port, logger=logger, rng=rng)
 
     def __enter__(self) -> "CloneSerialTransport":
@@ -2547,6 +2549,7 @@ class CloneSerialTransport:
         self._write(END_COMMAND)
         return bytes(raw)
 
+    # TODO: Need to sniff factory CPS to see if we can make this more reliable.
     def write_clone(self, data: bytes, *, segments: Sequence[CloneSegment] | None = None) -> None:
         """Write clone data back to the radio using the provided segments."""
 
@@ -2569,13 +2572,15 @@ class CloneSerialTransport:
             payload = self._apply_xor(bytearray(chunk))
             header = bytes((command, (address >> 8) & 0xFF, address & 0xFF, READ_BLOCK))
             self.logger.debug("Writing block: command=0x%02X address=0x%04X", command, address)
+            time.sleep(0.02)
             self._write(header + payload)
-            ack = self._read_exact(1)
-            if ack != ACK:
-                raise CloneTransportError(
-                    f"Write ACK mismatch at 0x{address:04X}: expected 0x06, got {ack.hex()}"
-                )
-            self.logger.debug("Received ACK for 0x%04X", address)
+            if not done == total_blocks - 1:
+                ack = self._read_exact(1)
+                if ack != ACK:
+                    raise CloneTransportError(
+                        f"Write ACK mismatch at 0x{address:04X}: expected 0x06, got {ack.hex()}"
+                    )
+                self.logger.debug("Received ACK for 0x%04X", address)
             offset += READ_BLOCK
             done += 1
             if self.progress_cb:
