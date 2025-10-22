@@ -286,6 +286,128 @@ _DCS_CODES = [
     "D754I",
 ]
 
+def get_repeater_offset(freq_hz, region="NA"):
+    """
+    Get typical repeater offset for a given frequency.
+
+    Args:
+        freq_hz (int): Frequency in Hz
+        region (str): Region code - "NA" (North America), "EU" (Europe), "UK" (United Kingdom)
+
+    Returns:
+        dict: Dictionary containing offset information with keys:
+            - 'offset_hz': Offset in Hz (positive for +, negative for -)
+            - 'direction': '+', '-', or 'split'
+            - 'band_name': Name of the amateur band
+            - 'notes': Additional information
+    """
+    freq_mhz = freq_hz / 1_000_000
+
+    # 6 meters (50-54 MHz)
+    if 50_000_000 <= freq_hz <= 54_000_000:
+        return {
+            'offset_hz': -1_000_000,  # -1 MHz
+            'direction': '-',
+            'band_name': '6 meters',
+            'notes': 'Some areas use -500 kHz; check local band plan'
+        }
+
+    # 2 meters (144-148 MHz)
+    elif 144_000_000 <= freq_hz <= 148_000_000:
+        if region == "UK":
+            if freq_hz < 145_000_000:
+                offset = -600_000
+                direction = '-'
+            else:
+                offset = 600_000
+                direction = '+'
+        else:
+            if freq_hz < 147_000_000:
+                offset = -600_000
+                direction = '-'
+            else:
+                offset = 600_000
+                direction = '+'
+
+        return {
+            'offset_hz': offset,
+            'direction': direction,
+            'band_name': '2 meters',
+            'notes': '±600 kHz is standard'
+        }
+
+    elif 222_000_000 <= freq_hz <= 225_000_000:
+        return {
+            'offset_hz': -1_600_000,  # -1.6 MHz
+            'direction': '-',
+            'band_name': '1.25 meters',
+            'notes': 'North America allocation only'
+        }
+
+    elif 420_000_000 <= freq_hz <= 450_000_000:
+        if region == "UK":
+            if freq_hz < 433_000_000:
+                offset = 1_600_000
+                direction = '+'
+            else:
+                offset = -1_600_000
+                direction = '-'
+            notes = '±1.6 MHz (UK)'
+        elif region == "EU":
+            offset = 1_600_000
+            direction = '+'
+            notes = '±1.6 MHz or ±7.6 MHz depending on country'
+        else:  # NA
+            if freq_hz < 445_000_000:
+                offset = -5_000_000
+                direction = '-'
+            else:
+                offset = 5_000_000
+                direction = '+'
+            notes = '±5 MHz standard in North America'
+
+        return {
+            'offset_hz': offset,
+            'direction': direction,
+            'band_name': '70 cm',
+            'notes': notes
+        }
+
+    # 33 cm (902-928 MHz) - North America only
+    elif 902_000_000 <= freq_hz <= 928_000_000:
+        # Default to -12 MHz for lower portion
+        if freq_hz < 915_000_000:
+            offset = -12_000_000
+            direction = '-'
+        else:
+            offset = 12_000_000
+            direction = '+'
+
+        return {
+            'offset_hz': offset,
+            'direction': direction,
+            'band_name': '33 cm',
+            'notes': '±12 MHz or ±25 MHz; varies by repeater'
+        }
+
+    # 23 cm (1240-1300 MHz)
+    elif 1_240_000_000 <= freq_hz <= 1_300_000_000:
+        return {
+            'offset_hz': -12_000_000,  # -12 MHz or -20 MHz
+            'direction': '-',
+            'band_name': '23 cm',
+            'notes': '-12 MHz or -20 MHz; check repeater directory'
+        }
+
+    # Not in a typical repeater band
+    else:
+        return {
+            'offset_hz': 0,
+            'direction': '',
+            'band_name': 'Unknown/Simplex',
+            'notes': f'{freq_mhz:.4f} MHz not in typical repeater band'
+        }
+
 class ToneMode(Enum):
     """Enumeration of tone encoding modes used by a channel slot."""
 
@@ -2288,7 +2410,7 @@ class CloneSerialConfig:
     """Configuration for opening a serial connection to the radio."""
 
     port: str
-    baudrate: int = 115200
+    baudrate: int = 9600
     timeout: float = 1.0
     write_timeout: float = 1.0
 
@@ -2605,7 +2727,7 @@ except ImportError:  # pragma: no cover - fallback for local development
             self.memory_bounds = (0, 0)
             self.valid_bands = []
             self.valid_duplexes = ["", "+", "-", "split"]
-            self.valid_tmodes = ["", "Tone", "TSQL", "DTCS"]
+            self.valid_tmodes = ["", "Tone", "TSQL", "DTCS", "Cross"]
             self.valid_modes = ["FM", "NFM", "AM"]
             self.valid_power_levels = ["Low", "Medium", "High"]
             self.valid_skips = ["", "S"]
@@ -3542,7 +3664,7 @@ class RT950ProRadio(chirp_common.CloneModeRadio):
         rf.has_tuning_step = False
         rf.can_delete = True
         rf.can_odd_split = True
-        rf.valid_tmodes = ["", "Tone", "TSQL", "DTCS"]
+        rf.valid_tmodes = ["", "Tone", "TSQL", "DTCS", "Cross"]
         rf.valid_duplexes = ["", "+", "-", "split"]
         rf.valid_modes = ["FM", "NFM", "AM"]
         rf.valid_power_levels = _CHIRP_POWER_LEVELS
@@ -3781,10 +3903,10 @@ class RT950ProRadio(chirp_common.CloneModeRadio):
             mem.offset = 0
             return
         diff = channel.tx_hz - channel.rx_hz
-        if diff > 0 and channel.tx_hz == channel.rx_hz + diff:
+        if diff > 0 and abs(diff) == abs(get_repeater_offset(channel.rx_hz)['offset_hz']):
             mem.duplex = "+"
             mem.offset = abs(diff)
-        elif diff < 0 and channel.tx_hz == channel.rx_hz + diff:
+        elif diff < 0 and abs(diff) == abs(get_repeater_offset(channel.rx_hz)['offset_hz']):
             mem.duplex = "-"
             mem.offset = abs(diff)
         else:
@@ -3809,11 +3931,16 @@ class RT950ProRadio(chirp_common.CloneModeRadio):
             mem.rtone = tx.ctcss_hz or 0.0
             return
         if tx.mode is ToneMode.CTCSS and rx.mode is ToneMode.CTCSS:
-            mem.tmode = "TSQL"
-            tone = tx.ctcss_hz or rx.ctcss_hz or 0.0
-            mem.rtone = tone
-            mem.ctone = tone
-            return
+            if tx.ctcss_hz == rx.ctcss_hz:
+                mem.tmode = "TSQL"
+                mem.rtone = rx.ctcss_hz or tx.ctcss_hz or 0.0
+                mem.ctone = mem.rtone
+                return
+            else:
+                mem.tmode = "Cross"
+                mem.rtone = tx.ctcss_hz
+                mem.ctone = rx.ctcss_hz
+                return
         if tx.mode is ToneMode.DCS and tx.dcs_code is not None:
             tx_pol = (tx.dcs_polarity or "N").upper()
             if rx.mode is ToneMode.DCS and rx.dcs_code is not None:
@@ -3844,11 +3971,11 @@ class RT950ProRadio(chirp_common.CloneModeRadio):
             return
         channel.rx_hz = mem.freq
         if mem.duplex == "+":
-            channel.tx_hz = mem.freq + mem.offset
+            channel.tx_hz = int(mem.freq + mem.offset)
         elif mem.duplex == "-":
-            channel.tx_hz = mem.freq - mem.offset
+            channel.tx_hz = int(mem.freq - mem.offset)
         elif mem.duplex == "split":
-            channel.tx_hz = mem.offset
+            channel.tx_hz = int(mem.offset)
         else:
             channel.tx_hz = mem.freq
         channel.name = (mem.name or "").strip()
@@ -3922,9 +4049,12 @@ class RT950ProRadio(chirp_common.CloneModeRadio):
             channel.tx_tone = channel.tx_tone.__class__.ctcss(mem.rtone)
             channel.rx_tone = channel.rx_tone.__class__.off()
         elif mem.tmode == "TSQL":
-            tone = mem.ctone or mem.rtone
-            channel.tx_tone = channel.tx_tone.__class__.ctcss(mem.rtone or tone)
+            tone =  mem.rtone or mem.ctone or 0.0
+            channel.tx_tone = channel.tx_tone.__class__.ctcss(mem.ctone or tone)
             channel.rx_tone = channel.rx_tone.__class__.ctcss(mem.ctone or tone)
+        elif mem.tmode == "Cross":
+            channel.tx_tone = channel.tx_tone.__class__.ctcss(mem.rtone)
+            channel.rx_tone = channel.rx_tone.__class__.ctcss(mem.ctone or mem.rtone)
         elif mem.tmode == "DTCS":
             polarity = getattr(mem, "dtcs_polarity", "NN") or "NN"
             tx_pol = polarity[0] if len(polarity) >= 1 else "N"
