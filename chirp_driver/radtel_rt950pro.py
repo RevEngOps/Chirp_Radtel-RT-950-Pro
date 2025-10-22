@@ -2549,7 +2549,6 @@ class CloneSerialTransport:
         self._write(END_COMMAND)
         return bytes(raw)
 
-    # TODO: Need to sniff factory CPS to see if we can make this more reliable.
     def write_clone(self, data: bytes, *, segments: Sequence[CloneSegment] | None = None) -> None:
         """Write clone data back to the radio using the provided segments."""
 
@@ -2570,9 +2569,12 @@ class CloneSerialTransport:
             if len(chunk) != READ_BLOCK:
                 raise CloneTransportError("Write chunk size mismatch")
             payload = self._apply_xor(bytearray(chunk))
-            header = bytes((command, (address >> 8) & 0xFF, address & 0xFF, READ_BLOCK))
+            # TODO: This is a hack.  Last segment sent is not being calculated properly.  This needs to be fixed.
+            if done == total_blocks - 1:
+                header = bytes.fromhex('58000080')
+            else:
+                header = bytes((command, (address >> 8) & 0xFF, address & 0xFF, READ_BLOCK))
             self.logger.debug("Writing block: command=0x%02X address=0x%04X", command, address)
-            time.sleep(0.02)
             self._write(header + payload)
             if not done == total_blocks - 1:
                 ack = self._read_exact(1)
@@ -2590,6 +2592,11 @@ class CloneSerialTransport:
                     pass
 
         self._write(END_COMMAND)
+        ack = self._read_exact(1)
+        if ack != ACK:
+            raise CloneTransportError(
+                f"Write ACK mismatch when ending write: expected 0x06, got {ack.hex()}"
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
