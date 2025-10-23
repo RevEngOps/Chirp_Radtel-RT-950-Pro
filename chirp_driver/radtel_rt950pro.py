@@ -38,7 +38,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import serial
-import time
 # MIT License
 #
 # Copyright (c) 2025 Nathan G. Barguss - 2E0NBS
@@ -2400,7 +2399,7 @@ DEFAULT_SEGMENTS: Tuple[CloneSegment, ...] = (
     CloneSegment(0x52, 0x57, 0xA000, 0x0200),
     CloneSegment(0x52, 0x57, 0xB000, 0x0200),
     CloneSegment(0x52, 0x57, 0xD000, 0x0300),
-    CloneSegment(0x54, 0x55, 0x0000, 0x0080),
+    CloneSegment(0x54, 0x58, 0x0000, 0x0080),
 )
 
 class CloneTransportError(RuntimeError):
@@ -2425,7 +2424,7 @@ class CloneSerialTransport:
         logger=None,
         rng: Optional[random.Random] = None,
     ) -> None:
-        self.serial: serial.Serial = serial_port
+        self.serial = serial_port
         self.logger = logger or get_logger("transport")
         # Enforce sensible minimums to avoid premature timeouts during clone
         try:
@@ -2463,7 +2462,6 @@ class CloneSerialTransport:
             timeout=config.timeout,
             write_timeout=config.write_timeout,
         )
-        time.sleep(0.05)
         return cls(port, logger=logger, rng=rng)
 
     def __enter__(self) -> "CloneSerialTransport":
@@ -2569,20 +2567,15 @@ class CloneSerialTransport:
             if len(chunk) != READ_BLOCK:
                 raise CloneTransportError("Write chunk size mismatch")
             payload = self._apply_xor(bytearray(chunk))
-            # TODO: This is a hack.  Last segment sent is not being calculated properly.  This needs to be fixed.
-            if done == total_blocks - 1:
-                header = bytes.fromhex('58000080')
-            else:
-                header = bytes((command, (address >> 8) & 0xFF, address & 0xFF, READ_BLOCK))
+            header = bytes((command, (address >> 8) & 0xFF, address & 0xFF, READ_BLOCK))
             self.logger.debug("Writing block: command=0x%02X address=0x%04X", command, address)
             self._write(header + payload)
-            if not done == total_blocks - 1:
-                ack = self._read_exact(1)
-                if ack != ACK:
-                    raise CloneTransportError(
-                        f"Write ACK mismatch at 0x{address:04X}: expected 0x06, got {ack.hex()}"
-                    )
-                self.logger.debug("Received ACK for 0x%04X", address)
+            ack = self._read_exact(1)
+            if ack != ACK:
+                raise CloneTransportError(
+                    f"Write ACK mismatch at 0x{address:04X}: expected 0x06, got {ack.hex()}"
+                )
+            self.logger.debug("Received ACK for 0x%04X", address)
             offset += READ_BLOCK
             done += 1
             if self.progress_cb:
